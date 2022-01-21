@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Redmine - project management software
-# Copyright (C) 2006-2019  Jean-Philippe Lang
+# Copyright (C) 2006-2021  Jean-Philippe Lang
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -33,7 +33,7 @@ module Redmine
           attachable_options[:delete_permission] = options.delete(:delete_permission) || "edit_#{self.name.pluralize.underscore}".to_sym
 
           has_many :attachments, lambda {order("#{Attachment.table_name}.created_on ASC, #{Attachment.table_name}.id ASC")},
-                                 options.merge(:as => :container, :dependent => :destroy, :inverse_of => :container)
+                                 **options, as: :container, dependent: :destroy, inverse_of: :container
           send :include, Redmine::Acts::Attachable::InstanceMethods
           before_save :attach_saved_attachments
           after_rollback :detach_saved_attachments
@@ -107,7 +107,7 @@ module Redmine
               end
               next unless a
               a.description = attachment['description'].to_s.strip
-              if a.new_record?
+              if a.new_record? || a.invalid?
                 unsaved_attachments << a
               else
                 saved_attachments << a

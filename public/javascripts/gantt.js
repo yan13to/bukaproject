@@ -1,5 +1,5 @@
 /* Redmine - project management software
-   Copyright (C) 2006-2019  Jean-Philippe Lang */
+   Copyright (C) 2006-2021  Jean-Philippe Lang */
 
 var draw_gantt = null;
 var draw_top;
@@ -38,7 +38,7 @@ function drawRelations() {
   $.each(arr, function(index_issue, element_issue) {
     var issue_from = $("#task-todo-issue-" + element_issue["issue_from"]);
     var issue_to   = $("#task-todo-issue-" + element_issue["issue_to"]);
-    if (issue_from.size() == 0 || issue_to.size() == 0) {
+    if (issue_from.length == 0 || issue_to.length == 0) {
       return;
     }
     var issue_height = issue_from.height();
@@ -124,7 +124,7 @@ function getProgressLinesArray() {
       if (is_over_end) {
         arr.push({left: draw_right, top: element_top_upper, is_right_edge: true});
         arr.push({left: draw_right, top: element_top_lower, is_right_edge: true, none_stroke: true});
-      } else if (issue_done.size() > 0) {
+      } else if (issue_done.length > 0) {
         var done_left = issue_done.first().position().left +
                            issue_done.first().width();
         arr.push({left: done_left, top: element_top_center});
@@ -134,7 +134,7 @@ function getProgressLinesArray() {
       } else {
         var todo_left = today_left;
         var issue_todo = $("#task-todo-" + $(element).attr("id"));
-        if (issue_todo.size() > 0){
+        if (issue_todo.length > 0){
           todo_left = issue_todo.first().position().left;
         }
         arr.push({left: Math.min(today_left, todo_left), top: element_top_center});
@@ -231,8 +231,9 @@ function resizableSubjectColumn(){
 }
 
 ganttEntryClick = function(e){
-  var subject = $(e.target.parentElement);
-  var subject_left = parseInt(subject.css('left'));
+  var icon_expander = e.target;
+  var subject = $(icon_expander.parentElement);
+  var subject_left = parseInt(subject.css('left')) + parseInt(icon_expander.offsetWidth);
   var target_shown = null;
   var target_top = 0;
   var total_height = 0;
@@ -252,13 +253,16 @@ ganttEntryClick = function(e){
   subject.nextAll('div').each(function(_, element){
     var el = $(element);
     var json = el.data('collapse-expand');
+    var number_of_rows = el.data('number-of-rows');
+    var el_task_bars = '#gantt_area form > div[data-collapse-expand="' + json.obj_id + '"][data-number-of-rows="' + number_of_rows + '"]';
+    var el_selected_columns = 'td.gantt_selected_column div[data-collapse-expand="' + json.obj_id + '"][data-number-of-rows="' + number_of_rows + '"]';
     if(out_of_hierarchy || parseInt(el.css('left')) <= subject_left){
       out_of_hierarchy = true;
       if(target_shown == null) return false;
 
       var new_top_val = parseInt(el.css('top')) + total_height * (target_shown ? -1 : 1);
       el.css('top', new_top_val);
-      $('#gantt_area form > div[data-collapse-expand="' + json.obj_id + '"], td.gantt_selected_column div[data-collapse-expand="' + json.obj_id + '"]').each(function(_, el){
+      $([el_task_bars, el_selected_columns].join()).each(function(_, el){
         $(el).css('top', new_top_val);
       });
       return true;
@@ -271,15 +275,14 @@ ganttEntryClick = function(e){
       total_height = 0;
     }
     if(is_shown == target_shown){
-      $('#gantt_area form > div[data-collapse-expand="' + json.obj_id + '"]').each(function(_, task) {
+      $(el_task_bars).each(function(_, task) {
         var el_task = $(task);
         if(!is_shown)
           el_task.css('top', target_top + total_height);
         if(!el_task.hasClass('tooltip'))
           el_task.toggle(!is_shown);
       });
-      $('td.gantt_selected_column div[data-collapse-expand="' + json.obj_id + '"]'
-          ).each(function (_, attr) {
+      $(el_selected_columns).each(function (_, attr) {
         var el_attr = $(attr);
         if (!is_shown)
           el_attr.css('top', target_top + total_height);

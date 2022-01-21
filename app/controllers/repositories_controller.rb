@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Redmine - project management software
-# Copyright (C) 2006-2019  Jean-Philippe Lang
+# Copyright (C) 2006-2021  Jean-Philippe Lang
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -35,6 +35,7 @@ class RepositoriesController < ApplicationController
   before_action :find_changeset, :only => [:revision, :add_related_issue, :remove_related_issue]
   before_action :authorize
   accept_rss_auth :revisions
+  accept_api_auth :add_related_issue, :remove_related_issue
 
   rescue_from Redmine::Scm::Adapters::CommandFailed, :with => :show_error_command_failed
 
@@ -100,6 +101,11 @@ class RepositoriesController < ApplicationController
 
   alias_method :browse, :show
 
+  def fetch_changesets
+    @repository.fetch_changesets if @project.active? && @path.empty? && !Setting.autofetch_changesets?
+    show
+  end
+
   def changes
     @entry = @repository.entry(@path, @rev)
     (show_error_not_found; return) unless @entry
@@ -120,8 +126,8 @@ class RepositoriesController < ApplicationController
       to_a
 
     respond_to do |format|
-      format.html { render :layout => false if request.xhr? }
-      format.atom { render_feed(@changesets, :title => "#{@project.name}: #{l(:label_revision_plural)}") }
+      format.html {render :layout => false if request.xhr?}
+      format.atom {render_feed(@changesets, :title => "#{@project.name}: #{l(:label_revision_plural)}")}
     end
   end
 
@@ -131,6 +137,12 @@ class RepositoriesController < ApplicationController
 
   def entry
     entry_and_raw(false)
+    @raw_url = url_for(:action => 'raw',
+                       :id     => @project,
+                       :repository_id => @repository.identifier_param,
+                       :path   => @path,
+                       :rev    => @rev,
+                       :only_path => true)
   end
 
   def entry_and_raw(is_raw)
@@ -142,7 +154,7 @@ class RepositoriesController < ApplicationController
 
     if is_raw
       # Force the download
-      send_opt = { :filename => filename_for_content_disposition(@path.split('/').last) }
+      send_opt = {:filename => filename_for_content_disposition(@path.split('/').last)}
       send_type = Redmine::MimeType.of(@path)
       send_opt[:type] = send_type.to_s if send_type
       send_opt[:disposition] = disposition(@path)
@@ -180,6 +192,7 @@ class RepositoriesController < ApplicationController
     # Ruby 1.8.6 has a bug of integer divisions.
     # http://apidock.com/ruby/v1_8_6_287/String/is_binary_data%3F
     return false if Redmine::Scm::Adapters::ScmData.binary?(ent)
+
     true
   end
   private :is_entry_text_data?
@@ -215,14 +228,20 @@ class RepositoriesController < ApplicationController
   # Adds a related issue to a changeset
   # POST /projects/:project_id/repository/(:repository_id/)revisions/:rev/issues
   def add_related_issue
-    issue_id = params[:issue_id].to_s.sub(/^#/,'')
+    issue_id = params[:issue_id].to_s.sub(/^#/, '')
     @issue = @changeset.find_referenced_issue_by_id(issue_id)
     if @issue && (!@issue.visible? || @changeset.issues.include?(@issue))
       @issue = nil
     end
 
-    if @issue
-      @changeset.issues << @issue
+    respond_to do |format|
+      if @issue
+        @changeset.issues << @issue
+        format.api { render_api_ok }
+      else
+        format.api { render_api_errors "#{l(:label_issue)} #{l('activerecord.errors.messages.invalid')}" }
+      end
+      format.js
     end
   end
 
@@ -232,6 +251,10 @@ class RepositoriesController < ApplicationController
     @issue = Issue.visible.find_by_id(params[:issue_id])
     if @issue
       @changeset.issues.delete(@issue)
+    end
+    respond_to do |format|
+      format.api { render_api_ok }
+      format.js
     end
   end
 
@@ -263,7 +286,7 @@ class RepositoriesController < ApplicationController
       @changeset = @repository.find_changeset_by_name(@rev)
       @changeset_to = @rev_to ? @repository.find_changeset_by_name(@rev_to) : nil
       @diff_format_revisions = @repository.diff_format_revisions(@changeset, @changeset_to)
-      render :diff, :formats => :html
+      render :diff, :formats => :html, :layout => 'base.html.erb'
     end
   end
 
@@ -307,7 +330,7 @@ class RepositoriesController < ApplicationController
     render_404
   end
 
-  REV_PARAM_RE = %r{\A[a-f0-9]*\Z}i
+  REV_PARAM_RE = %r{\A[a-f0-9]*\z}i
 
   def find_project_repository
     @project = Project.find(params[:id])
@@ -318,14 +341,12 @@ class RepositoriesController < ApplicationController
     end
     (render_404; return false) unless @repository
     @path = params[:path].is_a?(Array) ? params[:path].join('/') : params[:path].to_s
-    @rev = params[:rev].blank? ? @repository.default_branch : params[:rev].to_s.strip
-    @rev_to = params[:rev_to]
 
-    unless REV_PARAM_RE.match?(@rev.to_s) && REV_PARAM_RE.match?(@rev_to.to_s)
-      if @repository.branches.blank?
-        raise InvalidRevisionParam
-      end
-    end
+    @rev = params[:rev].to_s.strip.presence || @repository.default_branch
+    raise InvalidRevisionParam unless valid_name?(@rev)
+
+    @rev_to = params[:rev_to].to_s.strip.presence
+    raise InvalidRevisionParam unless valid_name?(@rev_to)
   rescue ActiveRecord::RecordNotFound
     render_404
   rescue InvalidRevisionParam
@@ -357,7 +378,7 @@ class RepositoriesController < ApplicationController
       group(:commit_date).
       count
     commits_by_month = [0] * 12
-    commits_by_day.each {|c| commits_by_month[(date_to.month - c.first.to_date.month) % 12] += c.last }
+    commits_by_day.each {|c| commits_by_month[(date_to.month - c.first.to_date.month) % 12] += c.last}
 
     changes_by_day = Change.
       joins(:changeset).
@@ -365,7 +386,7 @@ class RepositoriesController < ApplicationController
       group(:commit_date).
       count
     changes_by_month = [0] * 12
-    changes_by_day.each {|c| changes_by_month[(date_to.month - c.first.to_date.month) % 12] += c.last }
+    changes_by_day.each {|c| changes_by_month[(date_to.month - c.first.to_date.month) % 12] += c.last}
 
     fields = []
     today = User.current.today
@@ -394,7 +415,7 @@ class RepositoriesController < ApplicationController
     changes_data = changes_data + [0]*(10 - changes_data.length) if changes_data.length<10
 
     # Remove email address in usernames
-    fields = fields.collect {|c| c.gsub(%r{<.+@.+>}, '') }
+    fields = fields.collect {|c| c.gsub(%r{<.+@.+>}, '')}
 
     data = {
       :labels => fields.reverse,
@@ -409,5 +430,12 @@ class RepositoriesController < ApplicationController
     else
       'attachment'
     end
+  end
+
+  def valid_name?(rev)
+    return true if rev.nil?
+    return true if REV_PARAM_RE.match?(rev)
+
+    @repository ? @repository.valid_name?(rev) : true
   end
 end

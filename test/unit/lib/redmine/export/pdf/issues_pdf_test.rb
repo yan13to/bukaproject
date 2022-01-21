@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Redmine - project management software
-# Copyright (C) 2006-2019  Jean-Philippe Lang
+# Copyright (C) 2006-2021  Jean-Philippe Lang
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -35,5 +35,16 @@ class IssuesPdfHelperTest < ActiveSupport::TestCase
 
     results = fetch_row_values(issue, query, 0)
     assert_equal ["2", "Add ingredients categories", "4.34"], results
+  end
+
+  def test_fetch_row_values_should_be_able_to_handle_parent_issue_subject
+    query = IssueQuery.new(:project => Project.find(1), :name => '_')
+    query.column_names = [:subject, 'parent.subject']
+    issue = Issue.find(2)
+    issue.parent = Issue.find(1)
+    issue.save!
+
+    results = fetch_row_values(issue, query, 0)
+    assert_equal ['2', 'Add ingredients categories', 'Cannot print recipes'], results
   end
 end

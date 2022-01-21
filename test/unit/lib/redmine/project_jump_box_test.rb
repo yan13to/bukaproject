@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Redmine - project management software
-# Copyright (C) 2006-2019  Jean-Philippe Lang
+# Copyright (C) 2006-2021  Jean-Philippe Lang
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -23,18 +23,16 @@ class Redmine::ProjectJumpBoxTest < ActiveSupport::TestCase
   fixtures :users, :projects, :user_preferences
 
   def setup
-    @user = User.find_by_login 'dlopper'
+    @user = User.find_by_login 'jsmith'
+    User.current = @user
     @ecookbook = Project.find 'ecookbook'
     @onlinestore = Project.find 'onlinestore'
   end
 
-  def test_should_filter_bookmarked_projects
+  def test_should_find_bookmarked_projects
     pjb = Redmine::ProjectJumpBox.new @user
     pjb.bookmark_project @ecookbook
-
     assert_equal 1, pjb.bookmarked_projects.size
-    assert_equal 0, pjb.bookmarked_projects('online').size
-    assert_equal 1, pjb.bookmarked_projects('ecook').size
   end
 
   def test_should_not_include_bookmark_in_recently_used_list
@@ -47,13 +45,10 @@ class Redmine::ProjectJumpBoxTest < ActiveSupport::TestCase
     assert_equal 0, pjb.recently_used_projects.size
   end
 
-  def test_should_filter_recently_used_projects
+  def test_should_find_recently_used_projects
     pjb = Redmine::ProjectJumpBox.new @user
     pjb.project_used @ecookbook
-
     assert_equal 1, pjb.recently_used_projects.size
-    assert_equal 0, pjb.recently_used_projects('online').size
-    assert_equal 1, pjb.recently_used_projects('ecook').size
   end
 
   def test_should_limit_recently_used_projects
@@ -64,8 +59,6 @@ class Redmine::ProjectJumpBoxTest < ActiveSupport::TestCase
     @user.pref.recently_used_projects = 1
 
     assert_equal 1, pjb.recently_used_projects.size
-    assert_equal 1, pjb.recently_used_projects('online').size
-    assert_equal 0, pjb.recently_used_projects('ecook').size
   end
 
   def test_should_record_recently_used_projects_order
@@ -141,5 +134,17 @@ class Redmine::ProjectJumpBoxTest < ActiveSupport::TestCase
     assert_equal 2, pjb.recently_used_projects.size
     assert_equal @onlinestore, pjb.recently_used_projects.first
     assert_equal @ecookbook, pjb.recently_used_projects.last
+  end
+
+  def test_recents_list_should_include_only_visible_projects
+    @user = User.find_by_login 'dlopper'
+    User.current = @user
+
+    pjb = Redmine::ProjectJumpBox.new @user
+    pjb.project_used @ecookbook
+    pjb.project_used @onlinestore
+
+    assert_equal 1, pjb.recently_used_projects.size
+    assert_equal @ecookbook, pjb.recently_used_projects.first
   end
 end

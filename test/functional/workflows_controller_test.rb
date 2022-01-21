@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Redmine - project management software
-# Copyright (C) 2006-2019  Jean-Philippe Lang
+# Copyright (C) 2006-2021  Jean-Philippe Lang
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -97,8 +97,8 @@ class WorkflowsControllerTest < Redmine::ControllerTest
     get :edit, :params => {:role_id => 'all', :tracker_id => 'all'}
     assert_response :success
 
-    assert_select 'select[name=?][multiple=multiple]', 'role_id[]' do
-      assert_select 'option[selected=selected]', Role.all.count(&:consider_workflow?)
+    assert_select 'select[name=?]', 'role_id[]' do
+      assert_select 'option[selected=selected][value=all]'
     end
     assert_select 'select[name=?]', 'tracker_id[]' do
       assert_select 'option[selected=selected][value=all]'
@@ -125,7 +125,7 @@ class WorkflowsControllerTest < Redmine::ControllerTest
     assert_select 'table.workflows.transitions-always tbody tr:nth-child(2)' do
       assert_select 'td.name', :text => 'New'
       # assert that the td is enabled
-      assert_select "td[title='New » New'][class=?]", 'enabled'
+      assert_select "td.enabled[title='New » New']"
       # assert that the checkbox is disabled and checked
       assert_select "input[name='transitions[1][1][always]'][checked=?][disabled=?]", 'checked', 'disabled', 1
     end
@@ -145,8 +145,8 @@ class WorkflowsControllerTest < Redmine::ControllerTest
     assert_response 302
 
     assert_equal 3, WorkflowTransition.where(:tracker_id => 1, :role_id => 2).count
-    assert_not_nil  WorkflowTransition.where(:role_id => 2, :tracker_id => 1, :old_status_id => 3, :new_status_id => 2).first
-    assert_nil      WorkflowTransition.where(:role_id => 2, :tracker_id => 1, :old_status_id => 5, :new_status_id => 4).first
+    assert          WorkflowTransition.where(:role_id => 2, :tracker_id => 1, :old_status_id => 3, :new_status_id => 2).exists?
+    assert_not      WorkflowTransition.where(:role_id => 2, :tracker_id => 1, :old_status_id => 5, :new_status_id => 4).exists?
   end
 
   def test_post_edit_with_allowed_statuses_for_new_issues

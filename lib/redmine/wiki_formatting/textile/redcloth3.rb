@@ -354,22 +354,22 @@ class RedCloth3 < String
 
     # Text markup tags, don't conflict with block tags
     SIMPLE_HTML_TAGS = [
-        'tt', 'b', 'i', 'big', 'small', 'em', 'strong', 'dfn', 'code',
-        'samp', 'kbd', 'var', 'cite', 'abbr', 'acronym', 'a', 'img', 'br',
-        'br', 'map', 'q', 'sub', 'sup', 'span', 'bdo'
+      'tt', 'b', 'i', 'big', 'small', 'em', 'strong', 'dfn', 'code',
+      'samp', 'kbd', 'var', 'cite', 'abbr', 'acronym', 'a', 'img', 'br',
+      'br', 'map', 'q', 'sub', 'sup', 'span', 'bdo'
     ]
 
     QTAGS = [
-        ['**', 'b', :limit],
-        ['*', 'strong', :limit],
-        ['??', 'cite', :limit],
-        ['-', 'del', :limit],
-        ['__', 'i', :limit],
-        ['_', 'em', :limit],
-        ['%', 'span', :limit],
-        ['+', 'ins', :limit],
-        ['^', 'sup', :limit],
-        ['~', 'sub', :limit]
+      ['**', 'b', :limit],
+      ['*', 'strong', :limit],
+      ['??', 'cite', :limit],
+      ['-', 'del', :limit],
+      ['__', 'i', :limit],
+      ['_', 'em', :limit],
+      ['%', 'span', :limit],
+      ['+', 'ins', :limit],
+      ['^', 'sup', :limit],
+      ['~', 'sub', :limit]
     ]
     QTAGS_JOIN = QTAGS.map {|rc, ht, rtype| Regexp::quote rc}.join('|')
 
@@ -636,7 +636,7 @@ class RedCloth3 < String
     end
 
     def lT( text )
-        text =~ /\#$/ ? 'o' : 'u'
+        /\#$/.match?(text) ? 'o' : 'u'
     end
 
     def hard_break( text )
@@ -838,8 +838,12 @@ class RedCloth3 < String
               url = url[0..-2] # discard closing parenth from url
               post = ")" + post # add closing parenth to post
             end
+
+            url = htmlesc(url.dup)
+            next all if url.downcase.start_with?('javascript:')
+
             atts = pba(atts)
-            atts = +" href=\"#{htmlesc url}#{slash}\"#{atts}"
+            atts = +" href=\"#{url}#{slash}\"#{atts}"
             atts << " title=\"#{htmlesc title}\"" if title
             atts = shelve(atts) if atts
             external = (url =~ /^https?:\/\//) ? ' class="external"' : ''
@@ -904,7 +908,7 @@ class RedCloth3 < String
 
     def refs( text )
         @rules.each do |rule_name|
-            method( rule_name ).call( text ) if rule_name.to_s.match /^refs_/
+            method( rule_name ).call( text ) if rule_name.to_s.match? /^refs_/
         end
     end
 
@@ -957,7 +961,11 @@ class RedCloth3 < String
             href, alt_title = check_refs( href ) if href
             url, url_title = check_refs( url )
 
-            next m unless uri_with_safe_scheme?(url)
+            next m unless uri_with_safe_scheme?(url.partition('?').first)
+            if href
+              href = htmlesc(href.dup)
+              next m if href.downcase.start_with?('javascript:')
+            end
 
             out = +''
             out << "<a#{shelve(" href=\"#{href}\"")}>" if href
@@ -1008,7 +1016,7 @@ class RedCloth3 < String
     def clean_white_space( text )
         # normalize line breaks
         text.gsub!( /\r\n/, "\n" )
-        text.gsub!( /\r/, "\n" )
+        text.tr!( "\r", "\n" )
         text.gsub!( /\t/, '    ' )
         text.gsub!( /^ +$/, '' )
         text.gsub!( /\n{3,}/, "\n\n" )
@@ -1020,11 +1028,12 @@ class RedCloth3 < String
     end
 
     def flush_left( text )
-        indt = 0
-        if text =~ /^ /
-            unless text.empty?
-                indt += 1 while text !~ /^ {#{indt}}[^ ]/
-            end
+        if /(?![\r\n\t ])[[:cntrl:]]/.match?(text)
+            text.gsub!(/(?![\r\n\t ])[[:cntrl:]]/, '')
+        end
+        if /^ +\S/.match?(text)
+            indt = 0
+            indt += 1 until /^ {#{indt}}\S/.match?(text)
             if indt.nonzero?
                 text.gsub!( /^ {#{indt}}/, '' )
             end
@@ -1052,9 +1061,9 @@ class RedCloth3 < String
             text.gsub!( ALLTAG_MATCH ) do |line|
                 ## matches are off if we're between <code>, <pre> etc.
                 if $1
-                    if line =~ OFFTAG_OPEN
+                    if OFFTAG_OPEN.match?(line)
                         codepre += 1
-                    elsif line =~ OFFTAG_CLOSE
+                    elsif OFFTAG_CLOSE.match?(line)
                         codepre -= 1
                         codepre = 0 if codepre < 0
                     end

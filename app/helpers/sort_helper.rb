@@ -115,16 +115,16 @@ module SortHelper
 
     if column.to_s == @sort_criteria.first_key
       if @sort_criteria.first_asc?
-        css = 'sort asc'
+        css = 'sort asc icon icon-sorted-desc'
         order = 'desc'
       else
-        css = 'sort desc'
+        css = 'sort desc icon icon-sorted-asc'
         order = 'asc'
       end
     end
     caption = column.to_s.humanize unless caption
 
-    sort_options = { :sort => @sort_criteria.add(column.to_s, order).to_param }
+    sort_options = {:sort => @sort_criteria.add(column.to_s, order).to_param}
     link_to(caption, {:params => request.query_parameters.merge(sort_options)}, :class => css)
   end
 

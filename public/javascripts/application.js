@@ -1,12 +1,11 @@
 /* Redmine - project management software
-   Copyright (C) 2006-2019  Jean-Philippe Lang */
+   Copyright (C) 2006-2021  Jean-Philippe Lang */
 
-/* Fix for CVE-2015-9251, to be removed with JQuery >= 3.0 */
-$.ajaxPrefilter(function (s) {
-  if (s.crossDomain) {
-    s.contents.script = false;
-  }
-});
+function sanitizeHTML(string) {
+  var temp = document.createElement('span');
+  temp.textContent = string;
+  return temp.innerHTML;
+}
 
 function checkAll(id, checked) {
   $('#'+id).find('input[type=checkbox]:enabled').prop('checked', checked);
@@ -120,10 +119,6 @@ function initFilters() {
   $('#filters-table').on('click', 'td.field input[type=checkbox]', function() {
     toggleFilter($(this).val());
   });
-  $('#filters-table').on('click', '.toggle-multiselect', function() {
-    toggleMultiSelect($(this).siblings('select'))
-    $(this).toggleClass('icon-toggle-plus icon-toggle-minus')
-  });
   $('#filters-table').on('keypress', 'input[type=text]', function(e) {
     if (e.keyCode == 13) $(this).closest('form').submit();
   });
@@ -151,6 +146,7 @@ function addFilter(field, operator, values) {
   }
   $('#cb_'+fieldId).prop('checked', true);
   toggleFilter(field);
+  toggleMultiSelectIconInit();
   $('#add_filter_select').val('').find('option').each(function() {
     if ($(this).attr('value') == field) {
       $(this).attr('disabled', true);
@@ -189,7 +185,7 @@ function buildFilterRow(field, operator, values) {
   case "list_subprojects":
     tr.find('td.values').append(
       '<span style="display:none;"><select class="value" id="values_'+fieldId+'_1" name="v['+field+'][]"></select>' +
-      ' <span class="toggle-multiselect icon-only icon-toggle-plus">&nbsp;</span></span>'
+      ' <span class="toggle-multiselect icon-only '+(values.length > 1 ? 'icon-toggle-minus' : 'icon-toggle-plus')+'">&nbsp;</span></span>'
     );
     select = tr.find('td.values select');
     if (values.length > 1) { select.attr('multiple', true); }
@@ -336,11 +332,14 @@ function toggleOperator(field) {
 }
 
 function toggleMultiSelect(el) {
+  var isWorkflow = el.closest('.controller-workflows');
   if (el.attr('multiple')) {
     el.removeAttr('multiple');
+    if (isWorkflow) { el.find("option[value=all]").show(); }
     el.attr('size', 1);
   } else {
     el.attr('multiple', true);
+    if (isWorkflow) { el.find("option[value=all]").attr("selected", false).hide(); }
     if (el.children().length > 10)
       el.attr('size', 10);
     else
@@ -371,15 +370,29 @@ function showIssueHistory(journal, url) {
 
   switch(journal) {
     case 'notes':
+      tab_content.find('.journal').show();
       tab_content.find('.journal:not(.has-notes)').hide();
-      tab_content.find('.journal.has-notes').show();
+      tab_content.find('.journal .wiki').show();
+      tab_content.find('.journal .contextual .journal-actions').show();
+
+      // always show thumbnails in notes tab
+      var thumbnails = tab_content.find('.journal .thumbnails');
+      thumbnails.show();
+      // show journals without notes, but with thumbnails
+      thumbnails.parents('.journal').show();
       break;
     case 'properties':
-      tab_content.find('.journal.has-notes').hide();
-      tab_content.find('.journal:not(.has-notes)').show();
+      tab_content.find('.journal').show();
+      tab_content.find('.journal:not(.has-details)').hide();
+      tab_content.find('.journal .wiki').hide();
+      tab_content.find('.journal .thumbnails').hide();
+      tab_content.find('.journal .contextual .journal-actions').hide();
       break;
     default:
       tab_content.find('.journal').show();
+      tab_content.find('.journal .wiki').show();
+      tab_content.find('.journal .thumbnails').show();
+      tab_content.find('.journal .contextual .journal-actions').show();
   }
 
   return false;
@@ -467,7 +480,7 @@ function displayTabsButtons() {
         numHidden++;
       }
     });
-    var bw = $(el).parents('div.tabs-buttons').outerWidth(true);
+    var bw = $(el).find('div.tabs-buttons').outerWidth(true);
     if ((tabsWidth < el.width() - bw) && (lis.length === 0 || lis.first().is(':visible'))) {
       el.find('div.tabs-buttons').hide();
     } else {
@@ -570,6 +583,23 @@ function randomKey(size) {
   return key;
 }
 
+function copyTextToClipboard(target) {
+  if (target) {
+    var temp = document.createElement('textarea');
+    temp.value = target.getAttribute('data-clipboard-text');
+    document.body.appendChild(temp);
+    temp.select();
+    document.execCommand('copy');
+    if (temp.parentNode) {
+      temp.parentNode.removeChild(temp);
+    }
+    if ($(target).closest('.drdn.expanded').length) {
+      $(target).closest('.drdn.expanded').removeClass("expanded");
+    }
+  }
+  return false;
+}
+
 function updateIssueFrom(url, el) {
   $('#all_attributes input, #all_attributes textarea, #all_attributes select').each(function(){
     $(this).data('valuebeforeupdate', $(this).val());
@@ -617,6 +647,46 @@ function observeAutocompleteField(fieldId, url, options) {
   });
 }
 
+function multipleAutocompleteField(fieldId, url, options) {
+  function split(val) {
+    return val.split(/,\s*/);
+  }
+
+  function extractLast(term) {
+    return split(term).pop();
+  }
+
+  $(document).ready(function () {
+    $('#' + fieldId).autocomplete($.extend({
+      source: function (request, response) {
+        $.getJSON(url, {
+          term: extractLast(request.term)
+        }, response);
+      },
+      minLength: 2,
+      position: {collision: "flipfit"},
+      search: function () {
+        $('#' + fieldId).addClass('ajax-loading');
+      },
+      response: function () {
+        $('#' + fieldId).removeClass('ajax-loading');
+      },
+      select: function (event, ui) {
+        var terms = split(this.value);
+        // remove the current input
+        terms.pop();
+        // add the selected item
+        terms.push(ui.item.value);
+        // add placeholder to get the comma-and-space at the end
+        terms.push("");
+        this.value = terms.join(", ");
+        return false;
+      }
+    }, options));
+    $('#' + fieldId).addClass('autocomplete');
+  });
+}
+
 function observeSearchfield(fieldId, targetId, url) {
   $('#'+fieldId).each(function() {
     var $this = $(this);
@@ -652,7 +722,7 @@ $(document).ready(function(){
 
   // This variable is used to focus selected project
   var selected;
-  $(".drdn-trigger").click(function(e){
+  $(document).on('click', '.drdn-trigger', function(e){
     var drdn = $(this).closest(".drdn");
     if (drdn.hasClass("expanded")) {
       drdn.removeClass("expanded");
@@ -726,12 +796,12 @@ function beforeShowDatePicker(input, inst) {
   var default_date = null;
   switch ($(input).attr("id")) {
     case "issue_start_date" :
-      if ($("#issue_due_date").size() > 0) {
+      if ($("#issue_due_date").length > 0) {
         default_date = $("#issue_due_date").val();
       }
       break;
     case "issue_due_date" :
-      if ($("#issue_start_date").size() > 0) {
+      if ($("#issue_start_date").length > 0) {
         var start_date = $("#issue_start_date").val();
         if (start_date != "") {
           start_date = new Date(Date.parse(start_date));
@@ -851,6 +921,21 @@ function setupFilePreviewNavigation() {
   }
 }
 
+$(document).on('keydown', 'form textarea', function(e) {
+  // Submit the form with Ctrl + Enter or Command + Return
+  var targetForm = $(e.target).closest('form');
+  if(e.keyCode == 13 && ((e.ctrlKey && !e.metaKey) || (!e.ctrlKey && e.metaKey) && targetForm.length)) {
+    // For ajax, use click() instead of submit() to prevent "Invalid form authenticity token" error
+    if (targetForm.attr('data-remote') == 'true') {
+      if (targetForm.find('input[type=submit]').length === 0) { return false; }
+      targetForm.find('textarea').blur().removeData('changed');
+      targetForm.find('input[type=submit]').first().click();
+    } else {
+      targetForm.find('textarea').blur().removeData('changed');
+      targetForm.submit();
+    }
+  }
+});
 
 
 function hideOnLoad() {
@@ -890,6 +975,15 @@ function toggleDisabledOnChange() {
 }
 function toggleDisabledInit() {
   $('input[data-disables], input[data-enables], input[data-shows]').each(toggleDisabledOnChange);
+}
+function toggleMultiSelectIconInit() {
+  $('.toggle-multiselect:not(.icon-toggle-minus), .toggle-multiselect:not(.icon-toggle-plus)').each(function(){
+    if ($(this).siblings('select').find('option:selected').length > 1){
+      $(this).addClass('icon-toggle-minus');
+    } else {
+      $(this).addClass('icon-toggle-plus');
+    }
+  });
 }
 
 function toggleNewObjectDropdown() {
@@ -931,9 +1025,15 @@ $(document).ready(function(){
   $('#content').on('change', 'input[data-disables], input[data-enables], input[data-shows]', toggleDisabledOnChange);
   toggleDisabledInit();
 
+  $('#content').on('click', '.toggle-multiselect', function() {
+    toggleMultiSelect($(this).siblings('select'));
+    $(this).toggleClass('icon-toggle-plus icon-toggle-minus');
+  });
+  toggleMultiSelectIconInit();
+
   $('#history .tabs').on('click', 'a', function(e){
     var tab = $(e.target).attr('id').replace('tab-','');
-    document.cookie = 'history_last_tab=' + tab
+    document.cookie = 'history_last_tab=' + tab + '; SameSite=Lax'
   });
 });
 
@@ -954,6 +1054,7 @@ $(document).ready(function(){
       data: "text=" + element + '&' + attachments,
       success: function(data){
         jstBlock.find('.wiki-preview').html(data);
+        setupWikiTableSortableHeader();
       }
     });
   });
@@ -995,26 +1096,41 @@ function setupAttachmentDetail() {
   $(window).resize(setFilecontentContainerHeight);
 }
 
+function setupWikiTableSortableHeader() {
+  $('div.wiki table').each(function(i, table){
+    if (table.rows.length < 3) return true;
+    var tr = $(table.rows).first();
+    if (tr.find("TH").length > 0) {
+      tr.attr('data-sort-method', 'none');
+      tr.find("TD").attr('data-sort-method', 'none');
+      new Tablesort(table);
+    }
+  });
+}
 
 $(function () {
-    $('[title]').tooltip({
-        show: {
-          delay: 400
-        },
-        position: {
-          my: "center bottom-5",
-          at: "center top"
-        }
-    });
+  $("[title]:not(.no-tooltip)").tooltip({
+    show: {
+      delay: 400
+    },
+    position: {
+      my: "center bottom-5",
+      at: "center top"
+    }
+  });
 });
 
 function inlineAutoComplete(element) {
     'use strict';
-    // do not attach if Tribute is already initialized
-    if (element.dataset.tribute === 'true') {return;}
 
-    const issuesUrl = element.dataset.issuesUrl;
-    const usersUrl = element.dataset.usersUrl;
+    // do not attach if Tribute is already initialized
+    if (element.dataset.tribute === 'true') {return};
+
+    const getDataSource = function(entity) {
+      const dataSources = JSON.parse(rm.AutoComplete.dataSources);
+
+      return dataSources[entity];
+    }
 
     const remoteSearch = function(url, cb) {
       const xhr = new XMLHttpRequest();
@@ -1034,21 +1150,51 @@ function inlineAutoComplete(element) {
     };
 
     const tribute = new Tribute({
-      trigger: '#',
-      values: function (text, cb) {
-        if (event.target.type === 'text' && $(element).attr('autocomplete') != 'off') {
-          $(element).attr('autocomplete', 'off');
+      collection: [
+        {
+          trigger: '#',
+          values: function (text, cb) {
+            if (event.target.type === 'text' && $(element).attr('autocomplete') != 'off') {
+              $(element).attr('autocomplete', 'off');
+            }
+            remoteSearch(getDataSource('issues') + text, function (issues) {
+              return cb(issues);
+            });
+          },
+          lookup: 'label',
+          fillAttr: 'label',
+          requireLeadingSpace: true,
+          selectTemplate: function (issue) {
+            return '#' + issue.original.id;
+          },
+          menuItemTemplate: function (issue) {
+            return sanitizeHTML(issue.original.label);
+          },
+          noMatchTemplate: function () {
+            return '<span style:"visibility: hidden;"></span>';
+          }
+        },
+        {
+          trigger: '[[',
+          values: function (text, cb) {
+            remoteSearch(getDataSource('wiki_pages') + text, function (wikiPages) {
+              return cb(wikiPages);
+            });
+          },
+          lookup: 'label',
+          fillAttr: 'label',
+          requireLeadingSpace: true,
+          selectTemplate: function (wikiPage) {
+            return '[[' + wikiPage.original.value + ']]';
+          },
+          menuItemTemplate: function (wikiPage) {
+            return sanitizeHTML(wikiPage.original.label);
+          },
+          noMatchTemplate: function () {
+            return '<span style:"visibility: hidden;"></span>';
+          }
         }
-        remoteSearch(issuesUrl + text, function (issues) {
-          return cb(issues);
-        });
-      },
-      lookup: 'label',
-      fillAttr: 'label',
-      requireLeadingSpace: true,
-      selectTemplate: function (issue) {
-        return '#' + issue.original.id;
-      }
+      ]
     });
 
     tribute.attach(element);
@@ -1062,6 +1208,7 @@ $(document).ready(defaultFocus);
 $(document).ready(setupAttachmentDetail);
 $(document).ready(setupTabs);
 $(document).ready(setupFilePreviewNavigation);
+$(document).ready(setupWikiTableSortableHeader);
 $(document).on('focus', '[data-auto-complete=true]', function(event) {
   inlineAutoComplete(event.target);
 });

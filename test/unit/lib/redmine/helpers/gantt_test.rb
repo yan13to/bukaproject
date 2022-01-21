@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Redmine - project management software
-# Copyright (C) 2006-2019  Jean-Philippe Lang
+# Copyright (C) 2006-2021  Jean-Philippe Lang
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -44,6 +44,12 @@ class Redmine::Helpers::GanttHelperTest < Redmine::HelperTest
   def gantt_start
     @gantt.date_from
   end
+  private :gantt_start
+
+  def gantt_end
+    @gantt.date_to
+  end
+  private :gantt_end
 
   # Creates a Gantt chart for a 4 week span
   def create_gantt(project=Project.generate!, options={})
@@ -188,19 +194,19 @@ class Redmine::Helpers::GanttHelperTest < Redmine::HelperTest
                                    :parent_issue_id => @issue.id,
                                    :start_date => (today - 1),
                                    :due_date => (today + 2))
-                      )
+                     )
     @child2 = Issue.generate!(
                        attrs.merge(:subject => 'child2',
                                    :parent_issue_id => @issue.id,
                                    :start_date => today,
                                    :due_date => (today + 7))
-                       )
+                     )
     @grandchild = Issue.generate!(
                           attrs.merge(:subject => 'grandchild',
                                       :parent_issue_id => @child1.id,
                                       :start_date => (today - 1),
                                       :due_date => (today + 2))
-                          )
+                        )
     @output_buffer = @gantt.subjects
     # parent task 44px
     assert_select 'div.issue-subject[style*="left:44px"]', /#{@issue.subject}/
@@ -251,7 +257,7 @@ class Redmine::Helpers::GanttHelperTest < Redmine::HelperTest
     issue.update(:assigned_to_id => issue.assignable_users.first.id)
     @project.issues << issue
     # :column => assigned_to
-    @output_buffer = @gantt.selected_column_content({ :column => @gantt.query.columns.last })
+    @output_buffer = @gantt.selected_column_content({:column => @gantt.query.columns.last})
     assert_select "div.issue_assigned_to#assigned_to_issue_#{issue.id}"
   end
 
@@ -354,6 +360,26 @@ class Redmine::Helpers::GanttHelperTest < Redmine::HelperTest
     assert_select 'div.task_todo[style*="left:28px"]', 1
   end
 
+  test "#line todo line should appear if it ends on the leftmost date in the gantt" do
+    create_gantt
+    [gantt_start - 1, gantt_start].each do |start_date|
+      @output_buffer = @gantt.line(start_date, gantt_start, 30, false, 'line', :format => :html, :zoom => 4)
+      # the leftmost date (Date.today - 14 days)
+      assert_select 'div.task_todo[style*="left:0px"]', 1, @output_buffer
+      assert_select 'div.task_todo[style*="width:2px"]', 1, @output_buffer
+    end
+  end
+
+  test "#line todo line should appear if it starts on the rightmost date in the gantt" do
+    create_gantt
+    [gantt_end, gantt_end + 1].each do |end_date|
+      @output_buffer = @gantt.line(gantt_end, end_date, 30, false, 'line', :format => :html, :zoom => 4)
+      # the rightmost date (Date.today + 14 days)
+      assert_select 'div.task_todo[style*="left:112px"]', 1, @output_buffer
+      assert_select 'div.task_todo[style*="width:2px"]', 1, @output_buffer
+    end
+  end
+
   test "#line todo line should be the total width" do
     create_gantt
     @output_buffer = @gantt.line(today - 7, today + 7, 30, false, 'line', :format => :html, :zoom => 4)
@@ -424,6 +450,9 @@ class Redmine::Helpers::GanttHelperTest < Redmine::HelperTest
     @output_buffer = @gantt.line(today - 7, today + 7, 30, true, 'line', :format => :html, :zoom => 4)
     assert_select "div.starting", 1
     assert_select 'div.starting[style*="left:28px"]', 1
+    # starting marker on the leftmost boundary of the gantt
+    @output_buffer = @gantt.line(gantt_start, today + 7, 30, true, 'line', :format => :html, :zoom => 4)
+    assert_select 'div.starting[style*="left:0px"]', 1
   end
 
   test "#line starting marker should not appear if the start date is before gantt start date" do
@@ -437,6 +466,9 @@ class Redmine::Helpers::GanttHelperTest < Redmine::HelperTest
     @output_buffer = @gantt.line(today - 7, today + 7, 30, true, 'line', :format => :html, :zoom => 4)
     assert_select "div.ending", 1
     assert_select 'div.ending[style*="left:88px"]', 1
+    # ending marker on the rightmost boundary of the gantt
+    @output_buffer = @gantt.line(today - 7, gantt_end, 30, true, 'line', :format => :html, :zoom => 4)
+    assert_select 'div.ending[style*="left:116px"]', 1
   end
 
   test "#line ending marker should not appear if the end date is before gantt start date" do
@@ -458,7 +490,7 @@ class Redmine::Helpers::GanttHelperTest < Redmine::HelperTest
     issue.update(:assigned_to_id => issue.assignable_users.first.id)
     @project.issues << issue
     # :column => assigned_to
-    options = { :column => @gantt.query.columns.last, :top => 64, :format => :html }
+    options = {:column => @gantt.query.columns.last, :top => 64, :format => :html}
     @output_buffer = @gantt.column_content_for_issue(issue, options)
 
     assert_select "div.issue_assigned_to#assigned_to_issue_#{issue.id}"

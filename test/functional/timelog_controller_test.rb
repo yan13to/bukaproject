@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Redmine - project management software
-# Copyright (C) 2006-2019  Jean-Philippe Lang
+# Copyright (C) 2006-2021  Jean-Philippe Lang
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -21,7 +21,7 @@ require File.expand_path('../../test_helper', __FILE__)
 
 class TimelogControllerTest < Redmine::ControllerTest
   fixtures :projects, :enabled_modules, :roles, :members,
-           :member_roles, :issues, :time_entries, :users,
+           :member_roles, :issues, :time_entries, :users, :email_addresses,
            :trackers, :enumerations, :issue_statuses,
            :custom_fields, :custom_values,
            :projects_trackers, :custom_fields_trackers,
@@ -46,6 +46,8 @@ class TimelogControllerTest < Redmine::ControllerTest
       # blank option for project
       assert_select 'option[value=""]'
     end
+    assert_select 'label[for=?]', 'time_entry_user_id', 0
+    assert_select 'select[name=?]', 'time_entry[user_id]', 0
   end
 
   def test_new_with_project_id
@@ -150,6 +152,11 @@ class TimelogControllerTest < Redmine::ControllerTest
     assert_response :success
 
     assert_select 'form[action=?]', '/time_entries/2'
+
+    # Time entry user should be shown as text
+    # for user without permission to log time for other users
+    assert_select 'label[for=?]', 'time_entry_user_id', 1
+    assert_select 'a.user.active', :text => 'Redmine Admin'
   end
 
   def test_get_edit_with_an_existing_time_entry_with_inactive_activity
@@ -173,19 +180,73 @@ class TimelogControllerTest < Redmine::ControllerTest
     assert_select 'select[name=?]', 'time_entry[project_id]'
   end
 
+  def test_get_edit_should_validate_back_url
+    @request.session[:user_id] = 2
+
+    get :edit, :params => {:id => 2, :project_id => nil, :back_url => '/valid'}
+    assert_response :success
+    assert_select 'a[href=?]', '/valid', {:text => 'Cancel'}
+
+    get :edit, :params => {:id => 2, :project_id => nil, :back_url => 'invalid'}
+    assert_response :success
+    assert_select 'a[href=?]', 'invalid', {:text => 'Cancel', :count => 0}
+    assert_select 'a[href=?]', '/projects/ecookbook/time_entries', {:text => 'Cancel'}
+  end
+
+  def test_get_edit_with_an_existing_time_entry_with_locked_user
+    user = User.find(3)
+    entry = TimeEntry.generate!(:user_id => user.id, :comments => "Time entry on a future locked user")
+    entry.save!
+
+    user.status = User::STATUS_LOCKED
+    user.save!
+    Role.find_by_name('Manager').add_permission! :log_time_for_other_users
+    @request.session[:user_id] = 2
+
+    get :edit, :params => {
+      :id => entry.id
+    }
+
+    assert_response :success
+
+    assert_select 'select[name=?]', 'time_entry[user_id]' do
+      # User with id 3 should be selected even if it's locked
+      assert_select 'option[value="3"][selected=selected]'
+    end
+  end
+
+  def test_get_edit_for_other_user
+    Role.find_by_name('Manager').add_permission! :log_time_for_other_users
+    @request.session[:user_id] = 2
+
+    get :edit, :params => {
+      :id => 1
+    }
+
+    assert_response :success
+
+    assert_select 'select[name=?]', 'time_entry[user_id]' do
+      assert_select 'option[value="2"][selected=selected]', 1
+    end
+  end
+
   def test_post_create
     @request.session[:user_id] = 3
     assert_difference 'TimeEntry.count' do
-      post :create, :params => {
-        :project_id => 1,
-        :time_entry => {:comments => 'Some work on TimelogControllerTest',
-          # Not the default activity
-          :activity_id => '11',
-          :spent_on => '2008-03-14',
-          :issue_id => '1',
-          :hours => '7.3'
+      post(
+        :create,
+        :params => {
+          :project_id => 1,
+          :time_entry => {
+            :comments => 'Some work on TimelogControllerTest',
+            # Not the default activity
+            :activity_id => '11',
+            :spent_on => '2008-03-14',
+            :issue_id => '1',
+            :hours => '7.3'
+          }
         }
-      }
+      )
       assert_redirected_to '/projects/ecookbook/time_entries'
     end
 
@@ -306,19 +367,21 @@ class TimelogControllerTest < Redmine::ControllerTest
   def test_create_for_other_user
     Role.find_by_name('Manager').add_permission! :log_time_for_other_users
     @request.session[:user_id] = 2
-
-    post :create, :params => {
-      :project_id => 1,
-      :time_entry => {:comments => 'Some work on TimelogControllerTest',
-        # Not the default activity
-        :activity_id => '11',
-        :spent_on => '2008-03-14',
-        :issue_id => '1',
-        :hours => '7.3',
-        :user_id => '3'
+    post(
+      :create,
+      :params => {
+        :project_id => 1,
+        :time_entry => {
+          :comments => 'Some work on TimelogControllerTest',
+          # Not the default activity
+          :activity_id => '11',
+          :spent_on => '2008-03-14',
+          :issue_id => '1',
+          :hours => '7.3',
+          :user_id => '3'
+        }
       }
-    }
-
+    )
     assert_redirected_to '/projects/ecookbook/time_entries'
 
     t = TimeEntry.last
@@ -326,24 +389,26 @@ class TimelogControllerTest < Redmine::ControllerTest
     assert_equal 2, t.author_id
   end
 
-  def test_create_for_other_user_should_deny_for_user_without_permission
+  def test_create_for_other_user_should_fail_without_permission
     Role.find_by_name('Manager').remove_permission! :log_time_for_other_users
     @request.session[:user_id] = 2
-
-    post :create, :params => {
-      :project_id => 1,
-      :time_entry => {:comments => 'Some work on TimelogControllerTest',
-        # Not the default activity
-        :activity_id => '11',
-        :spent_on => '2008-03-14',
-        :issue_id => '1',
-        :hours => '7.3',
-        :user_id => '3'
+    post(
+      :create,
+      :params => {
+        :project_id => 1,
+        :time_entry => {
+          :comments => 'Some work on TimelogControllerTest',
+          # Not the default activity
+          :activity_id => '11',
+          :spent_on => '2008-03-14',
+          :issue_id => '1',
+          :hours => '7.3',
+          :user_id => '3'
+        }
       }
-    }
-
-    assert_response 403
-    assert_select 'p[id=?]', 'errorExplanation', :text => I18n.t(:error_not_allowed_to_log_time_for_other_users)
+    )
+    assert_response :success
+    assert_select_error /User is invalid/
   end
 
   def test_create_and_continue_at_project_level
@@ -611,7 +676,7 @@ class TimelogControllerTest < Redmine::ControllerTest
     assert_select_error /Issue is invalid/
   end
 
-  def test_update_should_deny_changing_user_for_user_without_permission
+  def test_update_should_fail_when_changing_user_without_permission
     Role.find_by_name('Manager').remove_permission! :log_time_for_other_users
     @request.session[:user_id] = 2
 
@@ -622,8 +687,28 @@ class TimelogControllerTest < Redmine::ControllerTest
       }
     }
 
-    assert_response 403
-    assert_select 'p[id=?]', 'errorExplanation', :text => I18n.t(:error_not_allowed_to_log_time_for_other_users)
+    assert_response :success
+    assert_select_error /User is invalid/
+  end
+
+  def test_update_should_allow_updating_existing_entry_logged_on_a_locked_user
+    entry = TimeEntry.generate!(:user_id => 2, :hours => 4, :comments => "Time entry on a future locked user")
+    Role.find_by_name('Manager').add_permission! :log_time_for_other_users
+    @request.session[:user_id] = 2
+
+    put :update, :params => {
+      :id => entry.id,
+      :time_entry => {
+        :hours => '6'
+      }
+    }
+
+    assert_response :redirect
+
+    entry.reload
+    # Ensure user didn't change
+    assert_equal 2, entry.user_id
+    assert_equal 6.0, entry.hours
   end
 
   def test_get_bulk_edit
@@ -634,7 +719,7 @@ class TimelogControllerTest < Redmine::ControllerTest
 
     assert_select 'ul#bulk-selection' do
       assert_select 'li', 2
-      assert_select 'li a', :text => '03/23/2007 - eCookbook: 4.25 hours'
+      assert_select 'li a', :text => '03/23/2007 - eCookbook: 4.25 hours (John Smith)'
     end
 
     assert_select 'form#bulk_edit_form[action=?]', '/time_entries/bulk_update' do
@@ -702,7 +787,7 @@ class TimelogControllerTest < Redmine::ControllerTest
   def test_bulk_update
     @request.session[:user_id] = 2
     # update time entry activity
-    post :bulk_update, :params => {:ids => [1, 2], :time_entry => { :activity_id => 9}}
+    post :bulk_update, :params => {:ids => [1, 2], :time_entry => {:activity_id => 9}}
 
     assert_response 302
     # check that the issues were updated
@@ -711,7 +796,7 @@ class TimelogControllerTest < Redmine::ControllerTest
 
   def test_bulk_update_with_failure
     @request.session[:user_id] = 2
-    post :bulk_update, :params => {:ids => [1, 2], :time_entry => { :hours => 'A'}}
+    post :bulk_update, :params => {:ids => [1, 2], :time_entry => {:hours => 'A'}}
 
     assert_response :success
     assert_select_error /Failed to save 2 time entrie/
@@ -723,7 +808,7 @@ class TimelogControllerTest < Redmine::ControllerTest
     Member.create!(:user_id => 2, :project_id => 3, :role_ids => [1])
 
     # update time entry activity
-    post :bulk_update, :params => {:ids => [1, 2, 4], :time_entry => { :activity_id => 9 }}
+    post :bulk_update, :params => {:ids => [1, 2, 4], :time_entry => {:activity_id => 9}}
 
     assert_response 302
     # check that the issues were updated
@@ -733,11 +818,11 @@ class TimelogControllerTest < Redmine::ControllerTest
   def test_bulk_update_on_different_projects_without_rights
     @request.session[:user_id] = 3
     user = User.find(3)
-    action = { :controller => "timelog", :action => "bulk_update" }
+    action = {:controller => "timelog", :action => "bulk_update"}
     assert user.allowed_to?(action, TimeEntry.find(1).project)
     assert ! user.allowed_to?(action, TimeEntry.find(5).project)
 
-    post :bulk_update, :params => {:ids => [1, 5], :time_entry => { :activity_id => 9 }}
+    post :bulk_update, :params => {:ids => [1, 5], :time_entry => {:activity_id => 9}}
     assert_response 403
   end
 
@@ -747,7 +832,7 @@ class TimelogControllerTest < Redmine::ControllerTest
     Role.find_by_name('Manager').add_permission! :edit_own_time_entries
     ids = (0..1).map {TimeEntry.generate!(:user => User.find(2)).id}
 
-    post :bulk_update, :params => {:ids => ids, :time_entry => { :activity_id => 9 }}
+    post :bulk_update, :params => {:ids => ids, :time_entry => {:activity_id => 9}}
     assert_response 302
   end
 
@@ -756,14 +841,19 @@ class TimelogControllerTest < Redmine::ControllerTest
     Role.find_by_name('Manager').remove_permission! :edit_time_entries
     Role.find_by_name('Manager').add_permission! :edit_own_time_entries
 
-    post :bulk_update, :params => {:ids => [1, 2], :time_entry => { :activity_id => 9 }}
+    post :bulk_update, :params => {:ids => [1, 2], :time_entry => {:activity_id => 9}}
     assert_response 403
   end
 
   def test_bulk_update_custom_field
     @request.session[:user_id] = 2
-    post :bulk_update, :params => {:ids => [1, 2], :time_entry => { :custom_field_values => {'10' => '0'} }}
-
+    post(
+      :bulk_update,
+      :params => {
+        :ids => [1, 2],
+        :time_entry => {:custom_field_values => {'10' => '0'}}
+      }
+    )
     assert_response 302
     assert_equal ["0", "0"], TimeEntry.where(:id => [1, 2]).collect {|i| i.custom_value_for(10).value}
   end
@@ -771,15 +861,20 @@ class TimelogControllerTest < Redmine::ControllerTest
   def test_bulk_update_clear_custom_field
     field = TimeEntryCustomField.generate!(:field_format => 'string')
     @request.session[:user_id] = 2
-    post :bulk_update, :params => {:ids => [1, 2], :time_entry => { :custom_field_values => {field.id.to_s => '__none__'} }}
-
+    post(
+      :bulk_update,
+      :params => {
+        :ids => [1, 2],
+        :time_entry => {:custom_field_values => {field.id.to_s => '__none__'}}
+      }
+    )
     assert_response 302
     assert_equal ["", ""], TimeEntry.where(:id => [1, 2]).collect {|i| i.custom_value_for(field).value}
   end
 
   def test_post_bulk_update_should_redirect_back_using_the_back_url_parameter
     @request.session[:user_id] = 2
-    post :bulk_update, :params => {:ids => [1,2], :back_url => '/time_entries'}
+    post :bulk_update, :params => {:ids => [1, 2], :back_url => '/time_entries'}
 
     assert_response :redirect
     assert_redirected_to '/time_entries'
@@ -787,7 +882,7 @@ class TimelogControllerTest < Redmine::ControllerTest
 
   def test_post_bulk_update_should_not_redirect_back_using_the_back_url_parameter_off_the_host
     @request.session[:user_id] = 2
-    post :bulk_update, :params => {:ids => [1,2], :back_url => 'http://google.com'}
+    post :bulk_update, :params => {:ids => [1, 2], :back_url => 'http://google.com'}
 
     assert_response :redirect
     assert_redirected_to :controller => 'timelog', :action => 'index', :project_id => Project.find(1).identifier
@@ -797,7 +892,7 @@ class TimelogControllerTest < Redmine::ControllerTest
     @request.session[:user_id] = 2
     Role.find_by_name('Manager').remove_permission! :edit_time_entries
 
-    post :bulk_update, :params => {:ids => [1,2]}
+    post :bulk_update, :params => {:ids => [1, 2]}
     assert_response 403
   end
 
@@ -867,10 +962,12 @@ class TimelogControllerTest < Redmine::ControllerTest
   def test_index_with_default_query_setting_using_custom_field
     field = TimeEntryCustomField.create!(:name => 'Foo', :field_format => 'int')
 
-    with_settings :time_entry_list_defaults => {
+    with_settings(
+      :time_entry_list_defaults => {
         'column_names' => ["spent_on", "user", "hours", "cf_#{field.id}"],
         'totalable_names' => ["hours", "cf_#{field.id}"]
-      } do
+      }
+    ) do
       get :index
       assert_response :success
     end
@@ -975,12 +1072,15 @@ class TimelogControllerTest < Redmine::ControllerTest
     TimeEntry.generate!(:issue => issue2, :hours => 3)
     @request.session[:user_id] = 2
 
-    get :index, :params => {
-      :project_id => 'ecookbook',
-      :f => ['issue.fixed_version_id'],
-      :op => {'issue.fixed_version_id' => '='},
-      :v => {'issue.fixed_version_id' => [version.id.to_s,version2.id.to_s]}
-    }
+    get(
+      :index,
+      :params => {
+        :project_id => 'ecookbook',
+        :f => ['issue.fixed_version_id'],
+        :op => {'issue.fixed_version_id' => '='},
+        :v => {'issue.fixed_version_id' => [version.id.to_s, version2.id.to_s]}
+      }
+    )
     assert_response :success
 
     assert_select 'tr.time-entry', 2
@@ -988,12 +1088,15 @@ class TimelogControllerTest < Redmine::ControllerTest
   end
 
   def test_index_at_project_level_with_date_range
-    get :index, :params => {
-      :project_id => 'ecookbook',
-      :f => ['spent_on'],
-      :op => {'spent_on' => '><'},
-      :v => {'spent_on' => ['2007-03-20', '2007-04-30']}
-    }
+    get(
+      :index,
+      :params => {
+        :project_id => 'ecookbook',
+        :f => ['spent_on'],
+        :op => {'spent_on' => '><'},
+        :v => {'spent_on' => ['2007-03-20', '2007-04-30']}
+      }
+    )
     assert_response :success
 
     assert_select 'tr.time-entry', 3
@@ -1002,11 +1105,14 @@ class TimelogControllerTest < Redmine::ControllerTest
   end
 
   def test_index_at_project_level_with_date_range_using_from_and_to_params
-    get :index, :params => {
-      :project_id => 'ecookbook',
-      :from => '2007-03-20',
-      :to => '2007-04-30'
-    }
+    get(
+      :index,
+      :params => {
+        :project_id => 'ecookbook',
+        :from => '2007-03-20',
+        :to => '2007-04-30'
+      }
+    )
     assert_response :success
 
     assert_select 'tr.time-entry', 3
@@ -1027,10 +1133,29 @@ class TimelogControllerTest < Redmine::ControllerTest
   end
 
   def test_index_should_sort_by_spent_on_and_created_on
-    t1 = TimeEntry.create!(:author => User.find(1), :user => User.find(1), :project => Project.find(1), :hours => 1, :spent_on => '2012-06-16', :created_on => '2012-06-16 20:00:00', :activity_id => 10)
-    t2 = TimeEntry.create!(:author => User.find(1), :user => User.find(1), :project => Project.find(1), :hours => 1, :spent_on => '2012-06-16', :created_on => '2012-06-16 20:05:00', :activity_id => 10)
-    t3 = TimeEntry.create!(:author => User.find(1), :user => User.find(1), :project => Project.find(1), :hours => 1, :spent_on => '2012-06-15', :created_on => '2012-06-16 20:10:00', :activity_id => 10)
-
+    t1 =
+      TimeEntry.create!(
+        :author => User.find(1), :user => User.find(1),
+        :project => Project.find(1),
+        :hours => 1,
+        :spent_on => '2012-06-16', :created_on => '2012-06-16 20:00:00',
+        :activity_id => 10
+      )
+    t2 =
+      TimeEntry.create!(
+        :author => User.find(1), :user => User.find(1),
+        :project => Project.find(1),
+        :hours => 1,
+        :spent_on => '2012-06-16', :created_on => '2012-06-16 20:05:00',
+        :activity_id => 10
+      )
+    t3 =
+      TimeEntry.create!(
+        :author => User.find(1), :user => User.find(1),
+        :project => Project.find(1),
+        :hours => 1, :spent_on => '2012-06-15', :created_on => '2012-06-16 20:10:00',
+        :activity_id => 10
+      )
     get :index, :params => {
       :project_id => 1,
       :f => ['spent_on'],
@@ -1038,28 +1163,66 @@ class TimelogControllerTest < Redmine::ControllerTest
       :v => {'spent_on' => ['2012-06-15', '2012-06-16']}
     }
     assert_response :success
-    assert_equal [t2, t1, t3].map(&:id).map(&:to_s), css_select('input[name="ids[]"]').map {|e| e.attr('value')}
+    assert_equal(
+      [t2, t1, t3].map(&:id).map(&:to_s),
+      css_select('input[name="ids[]"]').map {|e| e.attr('value')}
+    )
+    get(
+      :index,
+      :params => {
+        :project_id => 1,
+        :f => ['spent_on'],
+        :op => {'spent_on' => '><'},
+        :v => {'spent_on' => ['2012-06-15', '2012-06-16']},
+        :sort => 'spent_on'
+      }
+    )
+    assert_response :success
+    assert_equal(
+      [t3, t1, t2].map(&:id).map(&:to_s),
+      css_select('input[name="ids[]"]').map {|e| e.attr('value')}
+    )
+  end
 
-    get :index, :params => {
+  def test_index_should_sort_by_tweek_and_spent_on
+    t1 = TimeEntry.generate!(:spent_on => '2012-06-10') # tyear:2012, tweek:23
+    t2 = TimeEntry.generate!(:spent_on => '2012-06-11') # tyear:2012, tweek:24
+    t3 = TimeEntry.generate!(:spent_on => '2012-06-12') # tyear:2012, tweek:24
+    t4 = TimeEntry.generate!(:spent_on => '2013-06-12') # tyear:2013, tweek:24
+
+    params = {
       :project_id => 1,
       :f => ['spent_on'],
       :op => {'spent_on' => '><'},
-      :v => {'spent_on' => ['2012-06-15', '2012-06-16']},
-      :sort => 'spent_on'
+      :v => {'spent_on' => ['2012-06-10', '2013-06-12']}
     }
-    assert_response :success
-    assert_equal [t3, t1, t2].map(&:id).map(&:to_s), css_select('input[name="ids[]"]').map {|e| e.attr('value')}
+
+    [
+      [{:sort => 'tweek,spent_on'}, [t1, t2, t3, t4]],
+      [{:sort => 'tweek,spent_on:desc'}, [t1, t3, t2, t4]],
+      [{:sort => 'tweek:desc,spent_on'}, [t4, t2, t3, t1]],
+      [{:sort => 'tweek:desc,spent_on:desc'}, [t4, t3, t2, t1]],
+    ].each do |sort_criteria, expected|
+      get :index, :params => params.dup.merge(sort_criteria)
+      assert_response :success
+      expected_ids = expected.map(&:id).map(&:to_s)
+      actual_ids = css_select('input[name="ids[]"]').map {|e| e.attr('value')}
+      assert_equal expected_ids, actual_ids
+    end
   end
 
   def test_index_with_activity_filter
     activity = TimeEntryActivity.create!(:name => 'Activity')
     entry = TimeEntry.generate!(:issue_id => 1, :hours => 4.5, :activity => activity)
 
-    get :index, :params => {
-      :f => ['activity_id'],
-      :op => {'activity_id' => '='},
-      :v => {'activity_id' => [activity.id.to_s]}
-    }
+    get(
+      :index,
+      :params => {
+        :f => ['activity_id'],
+        :op => {'activity_id' => '='},
+        :v => {'activity_id' => [activity.id.to_s]}
+      }
+    )
     assert_response :success
     assert_select "tr#time-entry-#{entry.id}"
     assert_select "table.time-entries tbody tr", 1
@@ -1070,11 +1233,14 @@ class TimelogControllerTest < Redmine::ControllerTest
     issue = Issue.generate!(:project_id => 1, :tracker_id => 1, :status_id => 4)
     entry = TimeEntry.generate!(:issue => issue, :hours => 4.5)
 
-    get :index, :params => {
-      :f => ['issue.status_id'],
-      :op => {'issue.status_id' => '='},
-      :v => {'issue.status_id' => ['4']}
-    }
+    get(
+      :index,
+      :params => {
+        :f => ['issue.status_id'],
+        :op => {'issue.status_id' => '='},
+        :v => {'issue.status_id' => ['4']}
+      }
+    )
     assert_response :success
     assert_equal [entry].map(&:id).map(&:to_s), css_select('input[name="ids[]"]').map {|e| e.attr('value')}
   end
@@ -1084,13 +1250,15 @@ class TimelogControllerTest < Redmine::ControllerTest
     project.close
     project.save
 
-    get :index, :params => {
+    get(
+      :index,
+      :params => {
         :set_filter => 1,
         :f => ['project.status'],
         :op => {'project.status' => '='},
         :v => {'project.status' => ['1']}
-    }
-
+      }
+    )
     assert_response :success
 
     time_entries = css_select('input[name="ids[]"]').map {|e| e.attr('value')}
@@ -1264,7 +1432,11 @@ class TimelogControllerTest < Redmine::ControllerTest
   end
 
   def test_index_with_filter_on_issue_custom_field
-    issue = Issue.generate!(:project_id => 1, :tracker_id => 1, :custom_field_values => {2 => 'filter_on_issue_custom_field'})
+    issue =
+      Issue.generate!(
+        :project_id => 1, :tracker_id => 1,
+        :custom_field_values => {2 => 'filter_on_issue_custom_field'}
+      )
     entry = TimeEntry.generate!(:issue => issue, :hours => 2.5)
 
     get :index, :params => {
@@ -1273,11 +1445,18 @@ class TimelogControllerTest < Redmine::ControllerTest
       :v => {'issue.cf_2' => ['filter_on_issue_custom_field']}
     }
     assert_response :success
-    assert_equal [entry].map(&:id).map(&:to_s), css_select('input[name="ids[]"]').map {|e| e.attr('value')}
+    assert_equal(
+      [entry].map(&:id).map(&:to_s),
+      css_select('input[name="ids[]"]').map {|e| e.attr('value')}
+    )
   end
 
   def test_index_with_issue_custom_field_column
-    issue = Issue.generate!(:project_id => 1, :tracker_id => 1, :custom_field_values => {2 => 'filter_on_issue_custom_field'})
+    issue =
+      Issue.generate!(
+        :project_id => 1, :tracker_id => 1,
+        :custom_field_values => {2 => 'filter_on_issue_custom_field'}
+      )
     entry = TimeEntry.generate!(:issue => issue, :hours => 2.5)
 
     get :index, :params => {
@@ -1321,8 +1500,15 @@ class TimelogControllerTest < Redmine::ControllerTest
 
   def test_index_with_invalid_date_filter_should_not_validate
     @request.session[:user_id] = 2
-
-    get :index, :params => {:set_filter => '1', :f => ['spent_on'], :op => {'spent_on' => '='}, :v => {'spent_on' => ['2016-09-010']}}
+    get(
+      :index,
+      :params => {
+        :set_filter => '1',
+        :f => ['spent_on'],
+        :op => {'spent_on' => '='},
+        :v => {'spent_on' => ['2016-09-010']}
+      }
+    )
     assert_select_error 'Date is invalid'
     assert_select 'table.time-entries', 0
   end
@@ -1341,7 +1527,7 @@ class TimelogControllerTest < Redmine::ControllerTest
   def test_index_atom_feed
     get :index, :params => {:project_id => 1, :format => 'atom'}
     assert_response :success
-    assert_equal 'application/atom+xml', @response.content_type
+    assert_equal 'application/atom+xml', @response.media_type
     assert_select 'entry > title', :text => /7\.65 hours/
   end
 
@@ -1405,17 +1591,66 @@ class TimelogControllerTest < Redmine::ControllerTest
     assert_include "#{issue.tracker} #1: #{issue.subject}", line
   end
 
+  def test_index_csv_should_fill_issue_column_with_issue_id_if_issue_that_is_not_visible
+    @request.session[:user_id] = 3
+    issue = Issue.generate!(:author_id => 1, :is_private => true)
+    entry = TimeEntry.generate!(:issue => issue, :comments => "Issue column content test")
+
+    get :index, :params => {:format => 'csv'}
+    assert_not issue.visible?
+    line = response.body.split("\n").detect {|l| l.include?(entry.comments)}
+    assert_not_nil line
+    assert_not_include "#{issue.tracker} ##{issue.id}: #{issue.subject}", line
+    assert_include "##{issue.id}", line
+  end
+
   def test_index_grouped_by_created_on
     skip unless TimeEntryQuery.new.groupable_columns.detect {|c| c.name == :created_on}
 
-    get :index, :params => {
+    get(
+      :index,
+      :params => {
         :set_filter => 1,
         :group_by => 'created_on'
       }
+    )
     assert_response :success
 
     assert_select 'tr.group span.name', :text => '03/23/2007' do
       assert_select '+ span.count', :text => '2'
     end
+  end
+
+  def test_index_grouped_by_issue
+    get(
+      :index,
+      :params => {
+        :set_filter => 1,
+        :group_by => 'issue'
+      }
+    )
+    assert_response :success
+
+    assert_select 'tr.group span.name', :text => 'Bug #1: Cannot print recipes' do
+      assert_select '+ span.count', :text => '2'
+    end
+  end
+
+  def test_index_with_inline_issue_long_text_custom_field_column
+    field = IssueCustomField.create!(:name => 'Long text', :field_format => 'text', :full_width_layout => '1',
+      :tracker_ids => [1], :is_for_all => true)
+    issue = Issue.find(1)
+    issue.custom_field_values = {field.id => 'This is a long text'}
+    issue.save!
+
+    get(
+      :index,
+      :params => {
+        :set_filter => 1,
+        :c => ['subject', 'description', "issue.cf_#{field.id}"]
+      }
+    )
+    assert_response :success
+    assert_select "td.issue_cf_#{field.id}", :text => 'This is a long text'
   end
 end

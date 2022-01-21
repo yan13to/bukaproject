@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Redmine - project management software
-# Copyright (C) 2006-2019  Jean-Philippe Lang
+# Copyright (C) 2006-2021  Jean-Philippe Lang
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -237,6 +237,16 @@ class IssueSubtaskingTest < ActiveSupport::TestCase
       parent.generate_child!(:estimated_hours => 20)
       parent.generate_child!(:estimated_hours => 0)
       parent.reload.children.each(&:close!)
+      assert_equal 100, parent.reload.done_ratio
+    end
+  end
+
+  def test_done_ratio_of_parent_with_completed_children_should_not_be_99
+    with_settings :parent_issue_done_ratio => 'derived' do
+      parent = Issue.generate!
+      parent.generate_child!(:estimated_hours => 8.0, :done_ratio => 100)
+      parent.generate_child!(:estimated_hours => 8.1, :done_ratio => 100)
+      # (8.0 * 100 + 8.1 * 100) / (8.0 + 8.1) => 99.99999999999999
       assert_equal 100, parent.reload.done_ratio
     end
   end
