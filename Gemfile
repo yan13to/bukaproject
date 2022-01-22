@@ -1,6 +1,6 @@
 source 'https://rubygems.org'
 
-ruby '>= 2.4.0', '< 2.8.0'
+ruby '2.7.3'
 gem 'bundler', '>= 1.12.0'
 
 gem 'rails', '5.2.6'
@@ -89,7 +89,6 @@ group :test do
   gem 'simplecov', '~> 0.18.5', :require => false
   gem "ffi", platforms: [:mingw, :x64_mingw, :mswin]
   # For running system tests
-  gem 'puma'
   gem 'capybara', '~> 3.31.0'
   gem "selenium-webdriver"
   gem 'webdrivers', '~> 4.4', require: false
