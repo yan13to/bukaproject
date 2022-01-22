@@ -45,3 +45,5 @@
 /Capfile
 /config/deploy.rb
 /config/deploy/*
+
+/node_modules/*
