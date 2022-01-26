@@ -24,7 +24,7 @@ app_title:
 welcome_text:
   default:
 login_required:
-  default: 0
+  default: 1
   security_notifications: 1
 self_registration:
   default: '2'
