@@ -1,0 +1,3 @@
+[submodule "plugins/redmine_bootstrap"]
+	path = plugins/redmine_bootstrap
+	url = git@github.com:yan13to/redmine_bootstrap.git
